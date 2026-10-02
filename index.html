@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Welding Simulator - Three.js & Web Audio</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #0a0c10; font-family: sans-serif; }
+        #info { position: absolute; top: 15px; left: 15px; color: #fff; background: rgba(0,0,0,0.7); padding: 12px 20px; border-radius: 8px; pointer-events: none; }
+        #sound-btn { position: absolute; bottom: 20px; left: 20px; padding: 10px 20px; background: #00d2ff; border: none; font-weight: bold; border-radius: 5px; cursor: pointer; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div id="info">
+        <h3>Simulasi Pengelasan 3D (SMAW)</h3>
+        <p>• Klik & Tahan Mouse pada Plat untuk Memulai Las</p>
+        <p>• Putar Kamera: Klik Kanan / Drag di luar area plat</p>
+    </div>
+    <button id="sound-btn">Aktifkan Audio</button>
+
+    <script>
+        // Setup Three.js Scene
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x0a0c10, 0.03);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 8, 10);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 0, 0);
+
+        // Pencahayaan Lingkungan
+        const ambientLight = new THREE.AmbientLight(0x404050, 1.5);
+        scene.add(ambientLight);
+
+        // Plat Besi 3D
+        const plateGeo = new THREE.BoxGeometry(10, 0.4, 4);
+        const plateMat = new THREE.MeshStandardMaterial({ color: 0x3a3f4d, roughness: 0.5, metalness: 0.8 });
+        const plate = new THREE.Mesh(plateGeo, plateMat);
+        plate.position.y = -0.2;
+        scene.add(plate);
+
+        // Stang Las (Torch)
+        const torchGeo = new THREE.CylinderGeometry(0.08, 0.08, 2);
+        const torchMat = new THREE.MeshStandardMaterial({ color: 0xcc8800, metalness: 0.9 });
+        const torch = new THREE.Mesh(torchGeo, torchMat);
+        torch.rotation.z = Math.PI / 4;
+        scene.add(torch);
+
+        // Busur Cahaya
+        const arcLight = new THREE.PointLight(0x00d2ff, 0, 12);
+        scene.add(arcLight);
+
+        // Web Audio API Engine
+        let audioCtx, noiseNode, filterNode, masterGain;
+        let audioActive = false;
+
+        document.getElementById('sound-btn').addEventListener('click', () => {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const bufferSize = audioCtx.sampleRate * 2;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+                noiseNode = audioCtx.createBufferSource();
+                noiseNode.buffer = buffer;
+                noiseNode.loop = true;
+
+                filterNode = audioCtx.createBiquadFilter();
+                filterNode.type = 'bandpass';
+                filterNode.frequency.value = 1600;
+
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = 0;
+
+                noiseNode.connect(filterNode);
+                filterNode.connect(masterGain);
+                masterGain.connect(audioCtx.destination);
+                noiseNode.start();
+            }
+            audioCtx.resume();
+            audioActive = true;
+            document.getElementById('sound-btn').style.display = 'none';
+        });
+
+        // Event Interaksi
+        let isWelding = false;
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        window.addEventListener('mousedown', (e) => {
+            if (e.button === 0) isWelding = true;
+        });
+        window.addEventListener('mouseup', () => { isWelding = false; });
+
+        window.addEventListener('mousemove', (e) => {
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(plate);
+
+            if (intersects.length > 0) {
+                const p = intersects[0].point;
+                torch.position.set(p.x + 0.7, p.y + 1, p.z);
+                arcLight.position.set(p.x, p.y + 0.1, p.z);
+
+                if (isWelding) {
+                    // Tambah bead las
+                    const beadGeo = new THREE.SphereGeometry(0.12, 8, 8);
+                    const beadMat = new THREE.MeshStandardMaterial({ color: 0xffaa00, emissive: 0xff3300, emissiveIntensity: 1.5 });
+                    const bead = new THREE.Mesh(beadGeo, beadMat);
+                    bead.position.copy(p);
+                    scene.add(bead);
+                }
+            }
+        });
+
+        // Loop Animasi
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isWelding) {
+                arcLight.intensity = 15 + Math.random() * 25;
+                if (masterGain) masterGain.gain.setTargetAtTime(0.25, audioCtx.currentTime, 0.02);
+            } else {
+                arcLight.intensity = 0;
+                if (masterGain) masterGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>
